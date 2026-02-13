@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,26 +38,29 @@ def parse_scales(raw: str) -> list[float]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="双界面循环自动识图点击（打开/收集）")
-    parser.add_argument("--open-template", type=Path, default=Path("assets/open_btn.png"), help="界面一模板图，默认 assets/open_btn.png")
-    parser.add_argument("--collect-template", type=Path, default=Path("assets/collect_btn.png"), help="界面二模板图，默认 assets/collect_btn.png")
-    parser.add_argument("--open-threshold", type=float, default=0.84, help="打开按钮匹配阈值")
-    parser.add_argument("--collect-threshold", type=float, default=0.84, help="收集按钮匹配阈值")
-    parser.add_argument("--interval", type=float, default=0.2, help="每轮识别间隔秒数")
-    parser.add_argument("--cooldown", type=float, default=0.12, help="每次点击后的冷却秒数")
-    parser.add_argument("--max-clicks", type=int, default=0, help="最大点击次数，0 表示无限")
-    parser.add_argument("--region", type=int, nargs=4, metavar=("LEFT", "TOP", "WIDTH", "HEIGHT"), help="仅在指定区域识图")
-    parser.add_argument("--gray", action="store_true", help="灰度匹配（更快）")
-    parser.add_argument("--dry-run", action="store_true", help="只输出日志，不实际点击")
-    parser.add_argument("--scales", default="1.0", help="模板缩放倍率，例如 0.9,1.0,1.1")
-    parser.add_argument("--debug-dir", type=Path, help="命中时保存截图到目录")
+    parser.add_argument("--open-template", type=Path, default=Path("assets/open_btn.png"), help="界面一模板图")
+    parser.add_argument("--collect-template", type=Path, default=Path("assets/collect_btn.png"), help="界面二模板图")
+    parser.add_argument("--open-threshold", type=float, default=0.84)
+    parser.add_argument("--collect-threshold", type=float, default=0.84)
+    parser.add_argument("--interval", type=float, default=0.2)
+    parser.add_argument("--cooldown", type=float, default=0.12)
+    parser.add_argument("--max-clicks", type=int, default=0)
+    parser.add_argument("--region", type=int, nargs=4, metavar=("LEFT", "TOP", "WIDTH", "HEIGHT"))
+    parser.add_argument("--gray", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--scales", default="1.0")
+    parser.add_argument("--debug-dir", type=Path)
 
-    parser.add_argument("--click-backend", choices=["auto", "pyautogui", "pydirectinput"], default="auto", help="点击后端，默认 auto")
-    parser.add_argument("--click-count", type=int, default=1, help="每次命中连点次数，默认 1")
-    parser.add_argument("--click-interval", type=float, default=0.03, help="连点间隔秒数")
-    parser.add_argument("--move-duration", type=float, default=0.0, help="移动到目标点耗时秒数")
-    parser.add_argument("--post-move-delay", type=float, default=0.02, help="移动到点位后的等待秒数")
-    parser.add_argument("--x-offset", type=int, default=0, help="点击坐标 X 偏移（像素）")
-    parser.add_argument("--y-offset", type=int, default=0, help="点击坐标 Y 偏移（像素）")
+    parser.add_argument("--click-backend", choices=["auto", "pyautogui", "pydirectinput"], default="auto")
+    parser.add_argument("--click-method", choices=["click", "downup"], default="downup", help="click=普通点击；downup=按下抬起，部分游戏更兼容")
+    parser.add_argument("--click-count", type=int, default=1)
+    parser.add_argument("--click-interval", type=float, default=0.03)
+    parser.add_argument("--move-duration", type=float, default=0.0)
+    parser.add_argument("--post-move-delay", type=float, default=0.03)
+    parser.add_argument("--x-offset", type=int, default=0)
+    parser.add_argument("--y-offset", type=int, default=0)
+    parser.add_argument("--dpi-scale", type=float, default=1.0, help="坐标缩放倍率，如系统缩放 125% 可尝试 1.25")
+    parser.add_argument("--window-title", type=str, help="点击前激活窗口（标题包含匹配）")
     return parser.parse_args()
 
 
@@ -109,8 +113,6 @@ def resolve_click_backend(name: str):
         module.FAILSAFE = True
         module.PAUSE = 0
         return "pydirectinput", module
-
-    # auto: 优先用 pydirectinput（对部分游戏更有效）
     try:
         module = importlib.import_module("pydirectinput")
         module.FAILSAFE = True
@@ -120,12 +122,52 @@ def resolve_click_backend(name: str):
         return "pyautogui", pyautogui
 
 
+def focus_window_by_title(fragment: str) -> bool:
+    if not fragment:
+        return False
+    try:
+        gw = importlib.import_module("pygetwindow")
+    except Exception:
+        print("[提示] 未安装 pygetwindow，跳过窗口激活。")
+        return False
+
+    try:
+        wins = gw.getAllWindows()
+        target = None
+        for w in wins:
+            title = getattr(w, "title", "") or ""
+            if fragment.lower() in title.lower():
+                target = w
+                break
+        if target is None:
+            print(f"[提示] 未找到窗口标题包含: {fragment}")
+            return False
+        target.activate()
+        time.sleep(0.05)
+        return True
+    except Exception as exc:
+        print(f"[提示] 激活窗口失败: {exc}")
+        return False
+
+
+def do_click(click_api, x: int, y: int, click_method: str) -> None:
+    if click_method == "click":
+        click_api.click(x, y)
+        return
+
+    # downup: 对部分游戏兼容性更高
+    click_api.mouseDown(x=x, y=y)
+    time.sleep(0.01)
+    click_api.mouseUp(x=x, y=y)
+
+
 def click_center(
     location: tuple[int, int],
     template_size: tuple[int, int],
     offset: tuple[int, int],
     x_offset: int,
     y_offset: int,
+    dpi_scale: float,
     dry_run: bool,
     label: str,
     click_api,
@@ -133,23 +175,26 @@ def click_center(
     click_interval: float,
     move_duration: float,
     post_move_delay: float,
+    click_method: str,
 ) -> None:
     tw, th = template_size
-    click_x = offset[0] + location[0] + tw // 2 + x_offset
-    click_y = offset[1] + location[1] + th // 2 + y_offset
+    base_x = offset[0] + location[0] + tw // 2 + x_offset
+    base_y = offset[1] + location[1] + th // 2 + y_offset
+    click_x = int(round(base_x * dpi_scale))
+    click_y = int(round(base_y * dpi_scale))
 
     if dry_run:
-        print(f"[DRY] {label} -> ({click_x}, {click_y})")
+        print(f"[DRY] {label} -> ({click_x}, {click_y}) raw=({base_x}, {base_y}) scale={dpi_scale}")
         return
 
     click_api.moveTo(click_x, click_y, duration=move_duration)
     if post_move_delay > 0:
         time.sleep(post_move_delay)
     for _ in range(max(1, click_count)):
-        click_api.click(click_x, click_y)
+        do_click(click_api, click_x, click_y, click_method)
         if click_interval > 0:
             time.sleep(click_interval)
-    print(f"[OK] {label} -> ({click_x}, {click_y})")
+    print(f"[OK] {label} -> ({click_x}, {click_y}) method={click_method}")
 
 
 def save_debug(debug_dir: Path, frame: np.ndarray, label: str, score: float) -> None:
@@ -164,6 +209,9 @@ def main() -> None:
 
     pyautogui.FAILSAFE = True
     pyautogui.PAUSE = 0
+
+    if sys.platform.startswith("win") and args.dpi_scale == 1.0:
+        print("[提示] 若识别命中但游戏无反应，可尝试 --dpi-scale 1.25 或 1.5")
 
     try:
         open_template = load_template(args.open_template, args.gray)
@@ -188,7 +236,7 @@ def main() -> None:
         offset = (left, top)
 
     click_count = 0
-    print(f"脚本启动，Ctrl+C 退出。点击后端: {backend_name}。优先点击【收集】，其次【打开】。")
+    print(f"脚本启动，Ctrl+C 退出。点击后端: {backend_name}，点击方式: {args.click_method}。")
 
     with mss.mss() as sct:
         while True:
@@ -199,6 +247,8 @@ def main() -> None:
             clicked = False
             if collect_score >= args.collect_threshold:
                 print(f"[HIT] collect score={collect_score:.4f}, loc={collect_loc}")
+                if args.window_title:
+                    focus_window_by_title(args.window_title)
                 if args.debug_dir:
                     save_debug(args.debug_dir, frame, "collect", collect_score)
                 click_center(
@@ -207,6 +257,7 @@ def main() -> None:
                     offset,
                     args.x_offset,
                     args.y_offset,
+                    args.dpi_scale,
                     args.dry_run,
                     "collect",
                     click_api,
@@ -214,10 +265,13 @@ def main() -> None:
                     args.click_interval,
                     args.move_duration,
                     args.post_move_delay,
+                    args.click_method,
                 )
                 clicked = True
             elif open_score >= args.open_threshold:
                 print(f"[HIT] open score={open_score:.4f}, loc={open_loc}")
+                if args.window_title:
+                    focus_window_by_title(args.window_title)
                 if args.debug_dir:
                     save_debug(args.debug_dir, frame, "open", open_score)
                 click_center(
@@ -226,6 +280,7 @@ def main() -> None:
                     offset,
                     args.x_offset,
                     args.y_offset,
+                    args.dpi_scale,
                     args.dry_run,
                     "open",
                     click_api,
@@ -233,6 +288,7 @@ def main() -> None:
                     args.click_interval,
                     args.move_duration,
                     args.post_move_delay,
+                    args.click_method,
                 )
                 clicked = True
             else:
