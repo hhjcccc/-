@@ -49,6 +49,15 @@ python auto_clicker.py --window-title Pixel
 
 > `--window-title` 传游戏窗口标题里的一部分关键词。
 
+
+### D. 光标不自动移动（你现在这个问题）
+
+请加 `--force-setcursor`，会调用 Windows 系统 API 强制把鼠标移到目标点：
+
+```bash
+python auto_clicker.py --click-backend pydirectinput --click-method downup --force-setcursor
+```
+
 ## 5) 常用参数
 
 - `--click-backend auto|pyautogui|pydirectinput`
@@ -58,6 +67,7 @@ python auto_clicker.py --window-title Pixel
 - `--x-offset` / `--y-offset`
 - `--region LEFT TOP WIDTH HEIGHT`
 - `--dry-run`
+- `--force-setcursor`（Windows 下强制移动光标）
 
 ## 6) 说明
 

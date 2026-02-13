@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import importlib
 import sys
 import time
@@ -61,6 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--y-offset", type=int, default=0)
     parser.add_argument("--dpi-scale", type=float, default=1.0, help="坐标缩放倍率，如系统缩放 125% 可尝试 1.25")
     parser.add_argument("--window-title", type=str, help="点击前激活窗口（标题包含匹配）")
+    parser.add_argument("--force-setcursor", action="store_true", help="Windows 下额外调用 SetCursorPos 强制移动光标")
     return parser.parse_args()
 
 
@@ -150,6 +152,15 @@ def focus_window_by_title(fragment: str) -> bool:
         return False
 
 
+def move_cursor(click_api, x: int, y: int, move_duration: float, force_setcursor: bool) -> None:
+    # 先用自动化库移动
+    click_api.moveTo(x, y, duration=move_duration)
+
+    # 某些 Windows 游戏对移动事件不敏感，额外使用系统 API 强制设置光标位置
+    if force_setcursor and sys.platform.startswith("win"):
+        ctypes.windll.user32.SetCursorPos(int(x), int(y))
+
+
 def do_click(click_api, x: int, y: int, click_method: str) -> None:
     if click_method == "click":
         click_api.click(x, y)
@@ -176,6 +187,7 @@ def click_center(
     move_duration: float,
     post_move_delay: float,
     click_method: str,
+    force_setcursor: bool,
 ) -> None:
     tw, th = template_size
     base_x = offset[0] + location[0] + tw // 2 + x_offset
@@ -187,7 +199,7 @@ def click_center(
         print(f"[DRY] {label} -> ({click_x}, {click_y}) raw=({base_x}, {base_y}) scale={dpi_scale}")
         return
 
-    click_api.moveTo(click_x, click_y, duration=move_duration)
+    move_cursor(click_api, click_x, click_y, move_duration, force_setcursor)
     if post_move_delay > 0:
         time.sleep(post_move_delay)
     for _ in range(max(1, click_count)):
@@ -266,6 +278,7 @@ def main() -> None:
                     args.move_duration,
                     args.post_move_delay,
                     args.click_method,
+                    args.force_setcursor,
                 )
                 clicked = True
             elif open_score >= args.open_threshold:
@@ -289,6 +302,7 @@ def main() -> None:
                     args.move_duration,
                     args.post_move_delay,
                     args.click_method,
+                    args.force_setcursor,
                 )
                 clicked = True
             else:
