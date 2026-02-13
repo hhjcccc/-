@@ -1,11 +1,9 @@
 # 游戏宝箱双界面自动点击（Python）
 
 根据你的流程：
-1. **界面一**点击红框“打开”按钮。  
-2. 切到**界面二**后点击红框“收集”按钮。  
+1. **界面一**点击红框“打开”按钮。
+2. 切到**界面二**后点击红框“收集”按钮。
 3. 然后又回到界面一，循环往复。
-
-本脚本会同时识别两个按钮，且默认优先点“收集”（避免弹窗停住）。
 
 ## 1) 安装
 
@@ -15,63 +13,65 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-> Windows 把 `source .venv/bin/activate` 换成 `.venv\\Scripts\\activate`。
+## 2) 模板图
 
-## 2) 准备两张模板图
+准备两张模板：
+- `assets/open_btn.png`（界面一红框按钮）
+- `assets/collect_btn.png`（界面二红框按钮）
 
-你需要准备两张小图：
+## 3) 启动
 
-- `assets/open_btn.png`：界面一里红框“打开”按钮（建议只裁按钮本体）
-- `assets/collect_btn.png`：界面二里红框“收集”按钮
-
-建议：
-- 尽量只保留按钮，不要裁太多背景。
-- 每张模板大小建议 80~400 像素宽。
-- 模板来自你实际运行分辨率（2560x1600）时的截图，匹配更稳。
-
-## 3) 运行
-
-最简启动（使用默认模板路径）：
+最简：
 
 ```bash
 python auto_clicker.py
 ```
 
-完整参数示例：
+推荐（对游戏更稳）：
 
 ```bash
-python auto_clicker.py \
-  --open-template assets/open_btn.png \
-  --collect-template assets/collect_btn.png \
-  --open-threshold 0.84 \
-  --collect-threshold 0.84 \
-  --interval 0.20
+python auto_clicker.py --click-backend pydirectinput --click-count 2 --post-move-delay 0.03
 ```
 
-## 4) 推荐参数（你的场景）
+## 4) 关键参数
 
-先用 dry-run 调试：
+- `--click-backend auto|pyautogui|pydirectinput`
+  - `auto` 默认优先用 `pydirectinput`（很多游戏只认它）。
+- `--click-count 2`：每次命中连点两下。
+- `--x-offset` / `--y-offset`：如果识别对了但点击点偏了，可微调。
+- `--region LEFT TOP WIDTH HEIGHT`：只在按钮区域识图（更快、误点更少）。
+- `--dry-run`：只打印坐标，不点鼠标。
+
+## 5) 你这个“识别到了但游戏没反应”怎么处理
+
+按顺序试：
+
+1. 用 `pydirectinput`：
 
 ```bash
-python auto_clicker.py \
-  --open-template assets/open_btn.png \
-  --collect-template assets/collect_btn.png \
-  --dry-run \
-  --region 1500 1150 950 500
+python auto_clicker.py --click-backend pydirectinput
 ```
 
-说明：
-- `--region` 可以把识图范围限制在按钮附近，速度更快、误点更少。
-- 对 2560x1600，这个区域通常覆盖右下角按钮区域（可按你的窗口微调）。
+2. 增加连点和短暂停顿：
 
-常用参数：
-- `--max-clicks 500`：跑到 500 次自动停止。
-- `--gray`：灰度匹配，速度更快。
-- `--scales 0.9,1.0,1.1`：模板多尺度匹配，适合窗口缩放时使用。
-- `--debug-dir debug_hits`：每次命中保存截图，便于排查。
+```bash
+python auto_clicker.py --click-backend pydirectinput --click-count 2 --post-move-delay 0.03
+```
 
-## 5) 安全与稳定性
+3. 加坐标微调（例如向下偏 8 像素）：
 
-- 鼠标快速移动到左上角可触发 `pyautogui` failsafe，立即中断。
-- 游戏可能有反自动化策略，请先确认规则允许。
-- 若独占全屏模式截屏不稳定，可改为无边框窗口。
+```bash
+python auto_clicker.py --click-backend pydirectinput --y-offset 8
+```
+
+4. 先 dry-run 看坐标是否落在按钮正中：
+
+```bash
+python auto_clicker.py --dry-run
+```
+
+## 6) 注意
+
+- 先保证游戏窗口在前台并可接收鼠标输入。
+- 鼠标移到左上角可触发 failsafe 停止。
+- 某些游戏有反自动化策略，请自行确认规则。

@@ -1,4 +1,5 @@
 opencv-python
 mss
 pyautogui
+pydirectinput
 numpy
