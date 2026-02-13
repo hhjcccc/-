@@ -31,6 +31,14 @@ pip install -r requirements.txt
 
 ## 3) 运行
 
+最简启动（使用默认模板路径）：
+
+```bash
+python auto_clicker.py
+```
+
+完整参数示例：
+
 ```bash
 python auto_clicker.py \
   --open-template assets/open_btn.png \

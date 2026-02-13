@@ -47,8 +47,18 @@ def parse_scales(raw: str) -> list[float]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="双界面循环自动识图点击（打开/收集）")
-    parser.add_argument("--open-template", required=True, type=Path, help="界面一红框按钮模板图（打开）")
-    parser.add_argument("--collect-template", required=True, type=Path, help="界面二红框按钮模板图（收集）")
+    parser.add_argument(
+        "--open-template",
+        type=Path,
+        default=Path("assets/open_btn.png"),
+        help="界面一红框按钮模板图（打开），默认 assets/open_btn.png",
+    )
+    parser.add_argument(
+        "--collect-template",
+        type=Path,
+        default=Path("assets/collect_btn.png"),
+        help="界面二红框按钮模板图（收集），默认 assets/collect_btn.png",
+    )
     parser.add_argument("--open-threshold", type=float, default=0.84, help="打开按钮匹配阈值")
     parser.add_argument("--collect-threshold", type=float, default=0.84, help="收集按钮匹配阈值")
     parser.add_argument("--interval", type=float, default=0.2, help="每轮识别间隔秒数")
@@ -74,7 +84,12 @@ def parse_args() -> argparse.Namespace:
 
 def load_template(path: Path, gray: bool) -> np.ndarray:
     if not path.exists():
-        raise FileNotFoundError(f"模板图不存在: {path}")
+        raise FileNotFoundError(
+            f"模板图不存在: {path}\n"
+            "请确认路径正确，或把模板放到默认位置：\n"
+            "- assets/open_btn.png\n"
+            "- assets/collect_btn.png"
+        )
     flag = cv2.IMREAD_GRAYSCALE if gray else cv2.IMREAD_COLOR
     template = cv2.imread(str(path), flag)
     if template is None:
@@ -141,8 +156,14 @@ def main() -> None:
     pyautogui.FAILSAFE = True
     pyautogui.PAUSE = 0
 
-    open_template = load_template(args.open_template, args.gray)
-    collect_template = load_template(args.collect_template, args.gray)
+    try:
+        open_template = load_template(args.open_template, args.gray)
+        collect_template = load_template(args.collect_template, args.gray)
+    except FileNotFoundError as exc:
+        print("[错误] 模板加载失败：")
+        print(exc)
+        print("示例运行：python auto_clicker.py --dry-run")
+        return
 
     region = None
     offset = (0, 0)
