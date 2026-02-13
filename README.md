@@ -55,7 +55,13 @@ python auto_clicker.py --window-title Pixel
 请加 `--force-setcursor`，会调用 Windows 系统 API 强制把鼠标移到目标点：
 
 ```bash
-python auto_clicker.py --click-backend pydirectinput --click-method downup --force-setcursor
+python auto_clicker.py --click-backend pydirectinput --click-method downup --force-setcursor --force-sendinput-move
+```
+
+如果还不行，优先只开 sendinput：
+
+```bash
+python auto_clicker.py --click-backend pydirectinput --click-method downup --force-sendinput-move
 ```
 
 ## 5) 常用参数
@@ -67,7 +73,8 @@ python auto_clicker.py --click-backend pydirectinput --click-method downup --for
 - `--x-offset` / `--y-offset`
 - `--region LEFT TOP WIDTH HEIGHT`
 - `--dry-run`
-- `--force-setcursor`（Windows 下强制移动光标）
+- `--force-setcursor`（Windows 下调用 SetCursorPos）
+- `--force-sendinput-move`（Windows 下用 SendInput 强制移动，优先推荐）
 
 ## 6) 说明
 

@@ -63,6 +63,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dpi-scale", type=float, default=1.0, help="坐标缩放倍率，如系统缩放 125% 可尝试 1.25")
     parser.add_argument("--window-title", type=str, help="点击前激活窗口（标题包含匹配）")
     parser.add_argument("--force-setcursor", action="store_true", help="Windows 下额外调用 SetCursorPos 强制移动光标")
+    parser.add_argument("--force-sendinput-move", action="store_true", help="Windows 下使用 SendInput 绝对坐标强制移动光标")
     return parser.parse_args()
 
 
@@ -152,13 +153,45 @@ def focus_window_by_title(fragment: str) -> bool:
         return False
 
 
-def move_cursor(click_api, x: int, y: int, move_duration: float, force_setcursor: bool) -> None:
+def win_sendinput_move(x: int, y: int) -> None:
+    if not sys.platform.startswith("win"):
+        return
+
+    user32 = ctypes.windll.user32
+    screen_w = user32.GetSystemMetrics(0)
+    screen_h = user32.GetSystemMetrics(1)
+    if screen_w <= 1 or screen_h <= 1:
+        return
+
+    # 坐标映射到 0~65535
+    abs_x = int(x * 65535 / (screen_w - 1))
+    abs_y = int(y * 65535 / (screen_h - 1))
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long), ("mouseData", ctypes.c_ulong), ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong), ("dwExtraInfo", ctypes.c_ulonglong)]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", ctypes.c_ulong), ("mi", MOUSEINPUT)]
+
+    INPUT_MOUSE = 0
+    MOUSEEVENTF_MOVE = 0x0001
+    MOUSEEVENTF_ABSOLUTE = 0x8000
+
+    inp = INPUT(type=INPUT_MOUSE, mi=MOUSEINPUT(dx=abs_x, dy=abs_y, mouseData=0, dwFlags=MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, time=0, dwExtraInfo=0))
+    user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
+
+
+def move_cursor(click_api, x: int, y: int, move_duration: float, force_setcursor: bool, force_sendinput_move: bool) -> None:
     # 先用自动化库移动
     click_api.moveTo(x, y, duration=move_duration)
 
     # 某些 Windows 游戏对移动事件不敏感，额外使用系统 API 强制设置光标位置
     if force_setcursor and sys.platform.startswith("win"):
         ctypes.windll.user32.SetCursorPos(int(x), int(y))
+
+    # 更强硬的系统输入注入移动（某些游戏只认这个）
+    if force_sendinput_move and sys.platform.startswith("win"):
+        win_sendinput_move(int(x), int(y))
 
 
 def do_click(click_api, x: int, y: int, click_method: str) -> None:
@@ -188,6 +221,7 @@ def click_center(
     post_move_delay: float,
     click_method: str,
     force_setcursor: bool,
+    force_sendinput_move: bool,
 ) -> None:
     tw, th = template_size
     base_x = offset[0] + location[0] + tw // 2 + x_offset
@@ -199,7 +233,7 @@ def click_center(
         print(f"[DRY] {label} -> ({click_x}, {click_y}) raw=({base_x}, {base_y}) scale={dpi_scale}")
         return
 
-    move_cursor(click_api, click_x, click_y, move_duration, force_setcursor)
+    move_cursor(click_api, click_x, click_y, move_duration, force_setcursor, force_sendinput_move)
     if post_move_delay > 0:
         time.sleep(post_move_delay)
     for _ in range(max(1, click_count)):
@@ -224,6 +258,7 @@ def main() -> None:
 
     if sys.platform.startswith("win") and args.dpi_scale == 1.0:
         print("[提示] 若识别命中但游戏无反应，可尝试 --dpi-scale 1.25 或 1.5")
+        print("[提示] 若光标不自动移动，可加 --force-sendinput-move")
 
     try:
         open_template = load_template(args.open_template, args.gray)
@@ -279,6 +314,7 @@ def main() -> None:
                     args.post_move_delay,
                     args.click_method,
                     args.force_setcursor,
+                    args.force_sendinput_move,
                 )
                 clicked = True
             elif open_score >= args.open_threshold:
@@ -303,6 +339,7 @@ def main() -> None:
                     args.post_move_delay,
                     args.click_method,
                     args.force_setcursor,
+                    args.force_sendinput_move,
                 )
                 clicked = True
             else:
