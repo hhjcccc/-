@@ -1,6 +1,10 @@
 # 游戏宝箱双界面自动点击（Python）
 
-你反馈“还是不能自动移动”，我这版新增了更底层的 **Win32 原生输入注入**：`SendInput` 直接做“移动+点击”，不再依赖高层库的 moveTo 行为。
+你日志里出现了：目标是 `(1279, 1283)`，但系统光标实际在 `(1280, 799)`。这通常是 **Windows DPI 缩放导致坐标系不一致**（脚本进程没拿到真实分辨率坐标）。
+
+这版已加入：
+- 启动时自动设置进程 DPI Awareness（尽量拿到真实坐标）。
+- `--print-win-metrics` 打印系统分辨率指标，快速确认是否仍存在缩放错位。
 
 ## 安装
 
@@ -15,27 +19,31 @@ pip install -r requirements.txt
 - `assets/open_btn.png`
 - `assets/collect_btn.png`
 
-## 优先推荐（针对你当前问题）
+## 先执行这个（排查 + 最底层点击）
 
 ```bash
-python auto_clicker.py --use-native-win32-input
+python auto_clicker.py --use-native-win32-input --print-win-metrics
 ```
 
-如果窗口识别需要指定标题，再加：
+如果输出类似：
+- `GetSystemMetrics=2560x1600`：坐标系正常。
+- `GetSystemMetrics=1280x800`：说明仍被缩放影响，继续加 `--dpi-scale 2.0` 试。
+
+示例：
 
 ```bash
-python auto_clicker.py --window-title Pixel --use-native-win32-input
+python auto_clicker.py --use-native-win32-input --print-win-metrics --dpi-scale 2.0
 ```
 
 ## 备选模式
 
-1) 窗口消息点击（不依赖光标移动）：
+1) 窗口消息点击（不依赖光标移动）
 
 ```bash
 python auto_clicker.py --window-title Pixel --use-window-message-click
 ```
 
-2) 鼠标注入模式（旧方案）：
+2) 鼠标注入模式（旧链路）
 
 ```bash
 python auto_clicker.py --click-backend pydirectinput --click-method downup --force-sendinput-move
@@ -43,11 +51,12 @@ python auto_clicker.py --click-backend pydirectinput --click-method downup --for
 
 ## 关键参数
 
-- `--use-native-win32-input`：Windows 下最底层 SendInput 移动+点击（优先推荐）
-- `--use-window-message-click`：发窗口消息点击
+- `--use-native-win32-input`：Windows 最底层 SendInput 移动+点击（优先）
+- `--print-win-metrics`：打印系统坐标指标，定位 DPI 缩放问题
+- `--dpi-scale`：坐标倍率修正
+- `--use-window-message-click`：窗口消息点击
 - `--window-title`：窗口标题关键字
-- `--force-sendinput-move`：鼠标模式下强制 SendInput 移动
 
-## 说明
+## 注意
 
-- 如果游戏以管理员权限运行，脚本也建议用管理员权限运行（否则输入注入可能被系统拦截）。
+- 如果游戏是“管理员权限”运行，脚本也要“管理员权限”运行，否则输入注入可能被拦截。

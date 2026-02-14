@@ -28,6 +28,35 @@ class MonitorRegion:
         return {"left": self.left, "top": self.top, "width": self.width, "height": self.height}
 
 
+def enable_windows_dpi_awareness() -> None:
+    if not sys.platform.startswith("win"):
+        return
+
+    user32 = ctypes.windll.user32
+    try:
+        # Windows 10+
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)
+        if user32.SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2):
+            return
+    except Exception:
+        pass
+
+    try:
+        # Windows 8.1+
+        shcore = ctypes.windll.shcore
+        PROCESS_PER_MONITOR_DPI_AWARE = 2
+        shcore.SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE)
+        return
+    except Exception:
+        pass
+
+    try:
+        # Windows Vista+
+        user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
 def parse_scales(raw: str) -> list[float]:
     scales = [float(item.strip()) for item in raw.split(",") if item.strip()]
     if not scales:
@@ -66,6 +95,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force-sendinput-move", action="store_true")
     parser.add_argument("--use-window-message-click", action="store_true", help="Windows: 用 PostMessage 直接向窗口发送点击，不依赖鼠标移动")
     parser.add_argument("--use-native-win32-input", action="store_true", help="Windows: 使用 SendInput 原生注入移动+点击（最底层）")
+    parser.add_argument("--print-win-metrics", action="store_true", help="打印 Windows 屏幕指标，便于排查坐标缩放")
     return parser.parse_args()
 
 
@@ -177,8 +207,13 @@ def _win_abs_xy(x: int, y: int) -> tuple[int, int]:
     screen_h = user32.GetSystemMetrics(1)
     if screen_w <= 1 or screen_h <= 1:
         return x, y
-    abs_x = int(x * 65535 / (screen_w - 1))
-    abs_y = int(y * 65535 / (screen_h - 1))
+
+    abs_x = int(round(x * 65535 / (screen_w - 1)))
+    abs_y = int(round(y * 65535 / (screen_h - 1)))
+
+    # SendInput 绝对坐标要求 0~65535
+    abs_x = max(0, min(65535, abs_x))
+    abs_y = max(0, min(65535, abs_y))
     return abs_x, abs_y
 
 
@@ -363,6 +398,8 @@ def main() -> None:
     pyautogui.FAILSAFE = True
     pyautogui.PAUSE = 0
 
+    enable_windows_dpi_awareness()
+
     try:
         open_template = load_template(args.open_template, args.gray)
         collect_template = load_template(args.collect_template, args.gray)
@@ -376,6 +413,13 @@ def main() -> None:
     except ModuleNotFoundError:
         print("[错误] 你指定了 pydirectinput，但本机未安装。请执行: pip install pydirectinput")
         return
+
+    if args.print_win_metrics and sys.platform.startswith("win"):
+        user32 = ctypes.windll.user32
+        sm_w = user32.GetSystemMetrics(0)
+        sm_h = user32.GetSystemMetrics(1)
+        pg_w, pg_h = pyautogui.size()
+        print(f"[WIN] GetSystemMetrics={sm_w}x{sm_h}, pyautogui={pg_w}x{pg_h}, dpi_scale={args.dpi_scale}")
 
     region = None
     offset = (0, 0)
