@@ -96,6 +96,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--use-window-message-click", action="store_true", help="Windows: 用 PostMessage 直接向窗口发送点击，不依赖鼠标移动")
     parser.add_argument("--use-native-win32-input", action="store_true", help="Windows: 使用 SendInput 原生注入移动+点击（最底层）")
     parser.add_argument("--print-win-metrics", action="store_true", help="打印 Windows 屏幕指标，便于排查坐标缩放")
+    parser.add_argument("--auto-fallback-window-message", action="store_true", help="原生移动偏差大时自动回退窗口消息点击")
     return parser.parse_args()
 
 
@@ -172,6 +173,23 @@ def find_window_by_title(fragment: str):
     return None
 
 
+def get_target_hwnd(window_title: str | None):
+    if not sys.platform.startswith("win"):
+        return None
+
+    if window_title:
+        w = find_window_by_title(window_title)
+        hwnd = getattr(w, "_hWnd", None) if w else None
+        if hwnd:
+            return hwnd
+
+    try:
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        return hwnd if hwnd else None
+    except Exception:
+        return None
+
+
 def focus_window_by_title(fragment: str) -> bool:
     target = find_window_by_title(fragment)
     if not target:
@@ -217,9 +235,9 @@ def _win_abs_xy(x: int, y: int) -> tuple[int, int]:
     return abs_x, abs_y
 
 
-def win_native_move_and_click(x: int, y: int, click_count: int, click_interval: float) -> bool:
+def win_native_move_and_click(x: int, y: int, click_count: int, click_interval: float) -> tuple[bool, bool]:
     if not sys.platform.startswith("win"):
-        return False
+        return False, False
 
     user32 = ctypes.windll.user32
     MOUSEINPUT, INPUT = _win_build_input_structs()
@@ -234,27 +252,13 @@ def win_native_move_and_click(x: int, y: int, click_count: int, click_interval: 
 
     move_event = INPUT(
         type=INPUT_MOUSE,
-        mi=MOUSEINPUT(
-            dx=abs_x,
-            dy=abs_y,
-            mouseData=0,
-            dwFlags=MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
-            time=0,
-            dwExtraInfo=0,
-        ),
+        mi=MOUSEINPUT(dx=abs_x, dy=abs_y, mouseData=0, dwFlags=MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, time=0, dwExtraInfo=0),
     )
 
-    # 先移动一次
     user32.SendInput(1, ctypes.byref(move_event), ctypes.sizeof(move_event))
 
-    down_event = INPUT(
-        type=INPUT_MOUSE,
-        mi=MOUSEINPUT(dx=0, dy=0, mouseData=0, dwFlags=MOUSEEVENTF_LEFTDOWN, time=0, dwExtraInfo=0),
-    )
-    up_event = INPUT(
-        type=INPUT_MOUSE,
-        mi=MOUSEINPUT(dx=0, dy=0, mouseData=0, dwFlags=MOUSEEVENTF_LEFTUP, time=0, dwExtraInfo=0),
-    )
+    down_event = INPUT(type=INPUT_MOUSE, mi=MOUSEINPUT(dx=0, dy=0, mouseData=0, dwFlags=MOUSEEVENTF_LEFTDOWN, time=0, dwExtraInfo=0))
+    up_event = INPUT(type=INPUT_MOUSE, mi=MOUSEINPUT(dx=0, dy=0, mouseData=0, dwFlags=MOUSEEVENTF_LEFTUP, time=0, dwExtraInfo=0))
 
     for _ in range(max(1, click_count)):
         user32.SendInput(1, ctypes.byref(down_event), ctypes.sizeof(down_event))
@@ -262,17 +266,18 @@ def win_native_move_and_click(x: int, y: int, click_count: int, click_interval: 
         if click_interval > 0:
             time.sleep(click_interval)
 
-    # 校验是否真的移动到位（某些场景会失败）
     class POINT(ctypes.Structure):
         _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
     pt = POINT()
+    moved_ok = True
     if user32.GetCursorPos(ctypes.byref(pt)):
         dx = abs(pt.x - int(x))
         dy = abs(pt.y - int(y))
         if dx > 4 or dy > 4:
+            moved_ok = False
             print(f"[WARN] 原生注入后光标偏差较大: now=({pt.x},{pt.y}) target=({x},{y})")
-    return True
+    return True, moved_ok
 
 
 def win_sendinput_move(x: int, y: int) -> None:
@@ -303,13 +308,10 @@ def do_click(click_api, x: int, y: int, click_method: str) -> None:
 
 
 def post_message_click(window_title: str | None, x: int, y: int) -> bool:
-    if not sys.platform.startswith("win") or not window_title:
-        return False
-    w = find_window_by_title(window_title)
-    if not w:
+    if not sys.platform.startswith("win"):
         return False
 
-    hwnd = getattr(w, "_hWnd", None)
+    hwnd = get_target_hwnd(window_title)
     if not hwnd:
         return False
 
@@ -353,6 +355,7 @@ def click_center(
     force_sendinput_move: bool,
     use_window_message_click: bool,
     use_native_win32_input: bool,
+    auto_fallback_window_message: bool,
     window_title: str | None,
 ) -> None:
     tw, th = template_size
@@ -371,9 +374,17 @@ def click_center(
         return
 
     # 更底层：Win32 SendInput 一步完成移动+点击
-    if use_native_win32_input and win_native_move_and_click(click_x, click_y, click_count, click_interval):
-        print(f"[OK] {label} -> ({click_x}, {click_y}) method=native_win32")
-        return
+    if use_native_win32_input:
+        native_ok, moved_ok = win_native_move_and_click(click_x, click_y, click_count, click_interval)
+        if native_ok:
+            if moved_ok:
+                print(f"[OK] {label} -> ({click_x}, {click_y}) method=native_win32")
+                return
+            if auto_fallback_window_message and post_message_click(window_title, click_x, click_y):
+                print(f"[OK] {label} -> ({click_x}, {click_y}) method=native_win32+window_message_fallback")
+                return
+            print(f"[OK] {label} -> ({click_x}, {click_y}) method=native_win32 (cursor_locked)")
+            return
 
     move_cursor(click_api, click_x, click_y, move_duration, force_setcursor, force_sendinput_move)
     if post_move_delay > 0:
@@ -471,6 +482,7 @@ def main() -> None:
                     args.force_sendinput_move,
                     args.use_window_message_click,
                     args.use_native_win32_input,
+                    args.auto_fallback_window_message,
                     args.window_title,
                 )
 
