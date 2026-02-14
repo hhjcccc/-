@@ -100,6 +100,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window-point-priority", action="store_true", help="窗口消息点击时优先向目标坐标下的窗口句柄发送")
     parser.add_argument("--message-repeat", type=int, default=3, help="窗口消息点击重复次数")
     parser.add_argument("--message-delay", type=float, default=0.01, help="窗口消息点击每次间隔秒数")
+    parser.add_argument("--open-region", type=int, nargs=4, metavar=("LEFT", "TOP", "WIDTH", "HEIGHT"), help="仅用于 open 模板的绝对屏幕区域")
+    parser.add_argument("--collect-region", type=int, nargs=4, metavar=("LEFT", "TOP", "WIDTH", "HEIGHT"), help="仅用于 collect 模板的绝对屏幕区域")
+    parser.add_argument("--confirm-hit-frames", type=int, default=1, help="连续命中多少帧后才点击（减少误识别）")
     return parser.parse_args()
 
 
@@ -141,6 +144,48 @@ def match_with_scales(frame: np.ndarray, template: np.ndarray, scales: list[floa
             best_score, best_loc, best_size = score, loc, (tw, th)
     return best_score, best_loc, best_size
 
+
+
+
+def to_region(region_values: list[int] | tuple[int, int, int, int] | None) -> MonitorRegion | None:
+    if not region_values:
+        return None
+    left, top, width, height = region_values
+    return MonitorRegion(left=left, top=top, width=width, height=height)
+
+
+def crop_by_abs_region(
+    frame: np.ndarray,
+    capture_offset: tuple[int, int],
+    abs_region: MonitorRegion | None,
+) -> tuple[np.ndarray, tuple[int, int]]:
+    if abs_region is None:
+        return frame, capture_offset
+
+    cap_left, cap_top = capture_offset
+    rel_left = abs_region.left - cap_left
+    rel_top = abs_region.top - cap_top
+    rel_right = rel_left + abs_region.width
+    rel_bottom = rel_top + abs_region.height
+
+    h, w = frame.shape[:2]
+    x1 = max(0, rel_left)
+    y1 = max(0, rel_top)
+    x2 = min(w, rel_right)
+    y2 = min(h, rel_bottom)
+
+    if x2 <= x1 or y2 <= y1:
+        return frame[0:0, 0:0], capture_offset
+
+    sub = frame[y1:y2, x1:x2]
+    sub_offset = (cap_left + x1, cap_top + y1)
+    return sub, sub_offset
+
+
+def stable_hit(last_loc: tuple[int, int] | None, now_loc: tuple[int, int], tolerance: int = 10) -> bool:
+    if last_loc is None:
+        return False
+    return abs(last_loc[0] - now_loc[0]) <= tolerance and abs(last_loc[1] - now_loc[1]) <= tolerance
 
 def resolve_click_backend(name: str):
     if name == "pyautogui":
@@ -504,41 +549,84 @@ def main() -> None:
         pg_w, pg_h = pyautogui.size()
         print(f"[WIN] GetSystemMetrics={sm_w}x{sm_h}, pyautogui={pg_w}x{pg_h}, dpi_scale={args.dpi_scale}")
 
-    region = None
-    offset = (0, 0)
-    if args.region:
-        left, top, width, height = args.region
-        region = MonitorRegion(left=left, top=top, width=width, height=height)
-        offset = (left, top)
+    capture_region = to_region(args.region)
+    capture_offset = (capture_region.left, capture_region.top) if capture_region else (0, 0)
+
+    open_region = to_region(args.open_region)
+    collect_region = to_region(args.collect_region)
+
+    confirm_need = max(1, args.confirm_hit_frames)
+    streaks = {"open": 0, "collect": 0}
+    last_locs: dict[str, tuple[int, int] | None] = {"open": None, "collect": None}
 
     print(f"脚本启动，Ctrl+C 退出。后端: {backend_name}")
     click_total = 0
 
     with mss.mss() as sct:
         while True:
-            frame = capture_screen(sct, region, args.gray)
-            collect_score, collect_loc, collect_size = match_with_scales(frame, collect_template, scales)
-            open_score, open_loc, open_size = match_with_scales(frame, open_template, scales)
+            frame = capture_screen(sct, capture_region, args.gray)
+
+            collect_frame, collect_offset = crop_by_abs_region(frame, capture_offset, collect_region)
+            open_frame, open_offset = crop_by_abs_region(frame, capture_offset, open_region)
+
+            collect_score, collect_loc, collect_size = (-1.0, (0, 0), (0, 0))
+            if collect_frame.size > 0:
+                collect_score, collect_loc, collect_size = match_with_scales(collect_frame, collect_template, scales)
+
+            open_score, open_loc, open_size = (-1.0, (0, 0), (0, 0))
+            if open_frame.size > 0:
+                open_score, open_loc, open_size = match_with_scales(open_frame, open_template, scales)
 
             target = None
             if collect_score >= args.collect_threshold:
-                target = ("collect", collect_loc, collect_size, collect_score)
-            elif open_score >= args.open_threshold:
-                target = ("open", open_loc, open_size, open_score)
-            else:
-                print(f"[MISS] collect={collect_score:.4f}, open={open_score:.4f}")
+                if stable_hit(last_locs["collect"], collect_loc):
+                    streaks["collect"] += 1
+                else:
+                    streaks["collect"] = 1
+                last_locs["collect"] = collect_loc
 
-            if target:
-                label, loc, size, score = target
-                print(f"[HIT] {label} score={score:.4f}, loc={loc}")
+                if streaks["collect"] >= confirm_need:
+                    target = ("collect", collect_loc, collect_size, collect_score, collect_offset)
+            else:
+                streaks["collect"] = 0
+                last_locs["collect"] = None
+
+            if target is None and open_score >= args.open_threshold:
+                if stable_hit(last_locs["open"], open_loc):
+                    streaks["open"] += 1
+                else:
+                    streaks["open"] = 1
+                last_locs["open"] = open_loc
+
+                if streaks["open"] >= confirm_need:
+                    target = ("open", open_loc, open_size, open_score, open_offset)
+            elif target is not None:
+                # collect 命中时，open 的连击计数清零，避免跨界面误触
+                streaks["open"] = 0
+                last_locs["open"] = None
+            else:
+                streaks["open"] = 0
+                last_locs["open"] = None
+
+            if target is None:
+                print(
+                    f"[MISS] collect={collect_score:.4f}(streak={streaks['collect']}) "
+                    f"open={open_score:.4f}(streak={streaks['open']})"
+                )
+            else:
+                label, loc, size, score, target_offset = target
+                print(f"[HIT] {label} score={score:.4f}, loc={loc}, streak={streaks[label]}")
+
                 if args.window_title:
                     focus_window_by_title(args.window_title)
+
                 if args.debug_dir:
                     save_debug(args.debug_dir, frame, label, score)
+
                 click_center(
                     loc,
                     size,
-                    offset,
+                    target_offset,
                     args.x_offset,
                     args.y_offset,
                     args.dpi_scale,
@@ -560,6 +648,9 @@ def main() -> None:
                     args.message_delay,
                     args.window_title,
                 )
+
+                streaks[label] = 0
+                last_locs[label] = None
 
                 click_total += 1
                 if args.max_clicks > 0 and click_total >= args.max_clicks:

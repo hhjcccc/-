@@ -1,14 +1,13 @@
 # 游戏宝箱双界面自动点击（Python）
 
-你现在这个日志说明：
-- 识图命中稳定。
-- 原生移动经常被锁在中心。
-- 已经走了 `window_message_fallback`，但窗口可能不是正确句柄（父/子窗口差异）。
+你现在这个日志特征是：
+- `open` 会命中多个位置（例如 `1048` 和 `1746`）。
+- 有时点完后并没有稳定进入下一界面。  
+这通常是**误识别命中**导致（不是单纯点击失败）。
 
-这版加强了窗口消息点击：
-1. 目标点句柄 + 父/根窗口一起尝试。
-2. 同时发送 `PostMessage` 和 `SendMessage`。
-3. 支持重复发送（默认 3 次）。
+这版新增两类稳态控制：
+1. `--open-region` / `--collect-region`：给两个按钮单独限定识图区域。
+2. `--confirm-hit-frames`：要求连续命中 N 帧后再点击，过滤抖动误命中。
 
 ## 安装
 
@@ -25,22 +24,26 @@ pip install -r requirements.txt
 
 ## 推荐命令（先跑这个）
 
+> 以下区域是按你 2560x1600 场景的示例，可按实际微调。
+
 ```bash
 python auto_clicker.py \
   --use-native-win32-input \
   --auto-fallback-window-message \
   --window-point-priority \
+  --window-title "Pixel Gun 3D" \
+  --open-region 1500 1100 900 500 \
+  --collect-region 900 1050 900 500 \
+  --confirm-hit-frames 2 \
   --message-repeat 3 \
-  --message-delay 0.01 \
-  --window-title "Pixel Gun 3D"
+  --message-delay 0.01
 ```
 
-## 参数说明
+## 新参数说明
 
-- `--window-point-priority`：优先使用目标坐标下句柄，再尝试父/根窗口。
-- `--message-repeat`：每个候选窗口重复发消息次数。
-- `--message-delay`：每次消息发送间隔。
-- `--auto-fallback-window-message`：原生移动偏差大时自动切到窗口消息点击。
+- `--open-region LEFT TOP WIDTH HEIGHT`：只在该区域匹配 open。
+- `--collect-region LEFT TOP WIDTH HEIGHT`：只在该区域匹配 collect。
+- `--confirm-hit-frames 2`：同一位置连续命中 2 帧才点击。
 
 ## 备注
 
