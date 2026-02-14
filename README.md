@@ -1,6 +1,6 @@
 # 游戏宝箱双界面自动点击（Python）
 
-你反馈“还是不能自动移动”，说明游戏可能屏蔽了常规鼠标移动事件。这个版本新增了**窗口消息点击模式**，不依赖光标实际移动。
+你反馈“还是不能自动移动”，我这版新增了更底层的 **Win32 原生输入注入**：`SendInput` 直接做“移动+点击”，不再依赖高层库的 moveTo 行为。
 
 ## 安装
 
@@ -15,26 +15,39 @@ pip install -r requirements.txt
 - `assets/open_btn.png`
 - `assets/collect_btn.png`
 
-## 优先推荐命令（针对你当前问题）
+## 优先推荐（针对你当前问题）
 
-> 把 `Pixel` 换成你的游戏窗口标题关键字。
+```bash
+python auto_clicker.py --use-native-win32-input
+```
+
+如果窗口识别需要指定标题，再加：
+
+```bash
+python auto_clicker.py --window-title Pixel --use-native-win32-input
+```
+
+## 备选模式
+
+1) 窗口消息点击（不依赖光标移动）：
 
 ```bash
 python auto_clicker.py --window-title Pixel --use-window-message-click
 ```
 
-## 若仍需鼠标注入模式
+2) 鼠标注入模式（旧方案）：
 
 ```bash
 python auto_clicker.py --click-backend pydirectinput --click-method downup --force-sendinput-move
 ```
 
-## 参数补充
+## 关键参数
 
-- `--use-window-message-click`：Windows 下直接 `PostMessage` 发送点击到游戏窗口（不依赖光标是否移动）。
-- `--window-title`：用于定位目标窗口（窗口消息模式建议必须带上）。
-- `--force-sendinput-move`：继续使用鼠标方式时，强制 `SendInput` 移动。
+- `--use-native-win32-input`：Windows 下最底层 SendInput 移动+点击（优先推荐）
+- `--use-window-message-click`：发窗口消息点击
+- `--window-title`：窗口标题关键字
+- `--force-sendinput-move`：鼠标模式下强制 SendInput 移动
 
-## 注意
+## 说明
 
-- 有些游戏（尤其反作弊严格的）会屏蔽窗口消息点击；这时就只能继续用鼠标注入策略调参。
+- 如果游戏以管理员权限运行，脚本也建议用管理员权限运行（否则输入注入可能被系统拦截）。
