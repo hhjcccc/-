@@ -1,10 +1,14 @@
 # 游戏宝箱双界面自动点击（Python）
 
-你当前日志说明：原生移动经常被锁到中心，但偶发能成功。这类情况一般是游戏窗口输入层不稳定或消息发给了“错误句柄”（父窗口/子窗口不一致）。
+你现在这个日志说明：
+- 识图命中稳定。
+- 原生移动经常被锁在中心。
+- 已经走了 `window_message_fallback`，但窗口可能不是正确句柄（父/子窗口差异）。
 
-这版新增：
-- `--window-point-priority`：窗口消息点击时，优先给“目标坐标下的真实窗口句柄”发消息。
-- 同时发送 `PostMessage` + `SendMessage`，提升窗口消息路径命中率。
+这版加强了窗口消息点击：
+1. 目标点句柄 + 父/根窗口一起尝试。
+2. 同时发送 `PostMessage` 和 `SendMessage`。
+3. 支持重复发送（默认 3 次）。
 
 ## 安装
 
@@ -19,35 +23,25 @@ pip install -r requirements.txt
 - `assets/open_btn.png`
 - `assets/collect_btn.png`
 
-## 推荐命令（针对你当前日志）
+## 推荐命令（先跑这个）
 
 ```bash
 python auto_clicker.py \
   --use-native-win32-input \
   --auto-fallback-window-message \
   --window-point-priority \
-  --window-title Pixel
+  --message-repeat 3 \
+  --message-delay 0.01 \
+  --window-title "Pixel Gun 3D"
 ```
 
-说明：
-1. 先走原生 SendInput。
-2. 若检测到光标仍被锁中心，自动回退窗口消息点击。
-3. 回退时优先把消息发给目标点下的窗口句柄，而不是只靠标题匹配。
+## 参数说明
 
-## 可选排查
+- `--window-point-priority`：优先使用目标坐标下句柄，再尝试父/根窗口。
+- `--message-repeat`：每个候选窗口重复发消息次数。
+- `--message-delay`：每次消息发送间隔。
+- `--auto-fallback-window-message`：原生移动偏差大时自动切到窗口消息点击。
 
-```bash
-python auto_clicker.py --use-native-win32-input --print-win-metrics
-```
+## 备注
 
-## 关键参数
-
-- `--use-native-win32-input`
-- `--auto-fallback-window-message`
-- `--window-point-priority`
-- `--window-title`
-- `--use-window-message-click`
-
-## 注意
-
-- 游戏若管理员启动，脚本也请管理员启动。
+- 如果游戏管理员运行，脚本也请管理员运行。
