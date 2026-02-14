@@ -1,10 +1,10 @@
 # 游戏宝箱双界面自动点击（Python）
 
-你现在的日志显示：
-- 目标：`(1981,1267)`
-- 实际光标：`(1279,799)`（屏幕中间附近）
+你当前日志说明：原生移动经常被锁到中心，但偶发能成功。这类情况一般是游戏窗口输入层不稳定或消息发给了“错误句柄”（父窗口/子窗口不一致）。
 
-这通常是**游戏锁鼠标到中心**，不是识图错了。为此我加了“自动回退窗口消息点击”。
+这版新增：
+- `--window-point-priority`：窗口消息点击时，优先给“目标坐标下的真实窗口句柄”发消息。
+- 同时发送 `PostMessage` + `SendMessage`，提升窗口消息路径命中率。
 
 ## 安装
 
@@ -19,17 +19,22 @@ pip install -r requirements.txt
 - `assets/open_btn.png`
 - `assets/collect_btn.png`
 
-## 推荐命令（先跑这个）
+## 推荐命令（针对你当前日志）
 
 ```bash
-python auto_clicker.py --use-native-win32-input --auto-fallback-window-message --window-title Pixel
+python auto_clicker.py \
+  --use-native-win32-input \
+  --auto-fallback-window-message \
+  --window-point-priority \
+  --window-title Pixel
 ```
 
 说明：
-- 先尝试原生 `SendInput` 移动+点击。
-- 如果检测到光标仍被锁在中心（偏差大），会自动改用窗口消息点击，不再依赖光标移动。
+1. 先走原生 SendInput。
+2. 若检测到光标仍被锁中心，自动回退窗口消息点击。
+3. 回退时优先把消息发给目标点下的窗口句柄，而不是只靠标题匹配。
 
-## 调试命令（看坐标体系）
+## 可选排查
 
 ```bash
 python auto_clicker.py --use-native-win32-input --print-win-metrics
@@ -37,13 +42,12 @@ python auto_clicker.py --use-native-win32-input --print-win-metrics
 
 ## 关键参数
 
-- `--use-native-win32-input`：最底层 Win32 移动+点击。
-- `--auto-fallback-window-message`：原生移动失败时自动回退窗口消息点击（建议开启）。
-- `--window-title`：窗口标题关键字（回退窗口消息时建议填写）。
-- `--use-window-message-click`：只使用窗口消息点击。
-- `--dpi-scale`：坐标倍率修正。
+- `--use-native-win32-input`
+- `--auto-fallback-window-message`
+- `--window-point-priority`
+- `--window-title`
+- `--use-window-message-click`
 
 ## 注意
 
-- 若游戏管理员启动，脚本也需管理员启动。
-- 某些反作弊会屏蔽窗口消息，此时只能依赖可用的输入注入路径。
+- 游戏若管理员启动，脚本也请管理员启动。

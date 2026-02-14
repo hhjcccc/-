@@ -97,6 +97,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--use-native-win32-input", action="store_true", help="Windows: 使用 SendInput 原生注入移动+点击（最底层）")
     parser.add_argument("--print-win-metrics", action="store_true", help="打印 Windows 屏幕指标，便于排查坐标缩放")
     parser.add_argument("--auto-fallback-window-message", action="store_true", help="原生移动偏差大时自动回退窗口消息点击")
+    parser.add_argument("--window-point-priority", action="store_true", help="窗口消息点击时优先向目标坐标下的窗口句柄发送")
     return parser.parse_args()
 
 
@@ -307,13 +308,9 @@ def do_click(click_api, x: int, y: int, click_method: str) -> None:
     click_api.mouseUp(x=x, y=y)
 
 
-def post_message_click(window_title: str | None, x: int, y: int) -> bool:
+def get_hwnd_from_screen_point(x: int, y: int):
     if not sys.platform.startswith("win"):
-        return False
-
-    hwnd = get_target_hwnd(window_title)
-    if not hwnd:
-        return False
+        return None
 
     user32 = ctypes.windll.user32
 
@@ -321,19 +318,66 @@ def post_message_click(window_title: str | None, x: int, y: int) -> bool:
         _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
     pt = POINT(x, y)
-    if user32.ScreenToClient(hwnd, ctypes.byref(pt)) == 0:
+    try:
+        hwnd = user32.WindowFromPoint(pt)
+        return hwnd if hwnd else None
+    except Exception:
+        return None
+
+
+def post_message_click(window_title: str | None, x: int, y: int, window_point_priority: bool) -> bool:
+    if not sys.platform.startswith("win"):
         return False
 
-    lparam = (pt.y << 16) | (pt.x & 0xFFFF)
+    user32 = ctypes.windll.user32
+
+    class POINT(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+    hwnd_candidates = []
+    if window_point_priority:
+        pt_hwnd = get_hwnd_from_screen_point(x, y)
+        if pt_hwnd:
+            hwnd_candidates.append(pt_hwnd)
+
+    by_title = get_target_hwnd(window_title)
+    if by_title:
+        hwnd_candidates.append(by_title)
+
+    # 去重保持顺序
+    unique_hwnds = []
+    seen = set()
+    for h in hwnd_candidates:
+        if h and h not in seen:
+            seen.add(h)
+            unique_hwnds.append(h)
+
+    if not unique_hwnds:
+        return False
+
     WM_MOUSEMOVE = 0x0200
     WM_LBUTTONDOWN = 0x0201
     WM_LBUTTONUP = 0x0202
     MK_LBUTTON = 0x0001
 
-    user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
-    user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
-    user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
-    return True
+    for hwnd in unique_hwnds:
+        pt = POINT(x, y)
+        if user32.ScreenToClient(hwnd, ctypes.byref(pt)) == 0:
+            continue
+
+        lparam = (pt.y << 16) | (pt.x & 0xFFFF)
+
+        # 同时发 PostMessage 和 SendMessage，尽量兼容不同窗口消息循环
+        user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
+        user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+        user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+
+        user32.SendMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
+        user32.SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+        user32.SendMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+        return True
+
+    return False
 
 
 def click_center(
@@ -356,6 +400,7 @@ def click_center(
     use_window_message_click: bool,
     use_native_win32_input: bool,
     auto_fallback_window_message: bool,
+    window_point_priority: bool,
     window_title: str | None,
 ) -> None:
     tw, th = template_size
@@ -369,7 +414,7 @@ def click_center(
         return
 
     # 新增：直接发窗口消息点击（不依赖光标移动）
-    if use_window_message_click and post_message_click(window_title, click_x, click_y):
+    if use_window_message_click and post_message_click(window_title, click_x, click_y, window_point_priority):
         print(f"[OK] {label} -> ({click_x}, {click_y}) method=window_message")
         return
 
@@ -380,7 +425,7 @@ def click_center(
             if moved_ok:
                 print(f"[OK] {label} -> ({click_x}, {click_y}) method=native_win32")
                 return
-            if auto_fallback_window_message and post_message_click(window_title, click_x, click_y):
+            if auto_fallback_window_message and post_message_click(window_title, click_x, click_y, window_point_priority):
                 print(f"[OK] {label} -> ({click_x}, {click_y}) method=native_win32+window_message_fallback")
                 return
             print(f"[OK] {label} -> ({click_x}, {click_y}) method=native_win32 (cursor_locked)")
@@ -483,6 +528,7 @@ def main() -> None:
                     args.use_window_message_click,
                     args.use_native_win32_input,
                     args.auto_fallback_window_message,
+                    args.window_point_priority,
                     args.window_title,
                 )
 
